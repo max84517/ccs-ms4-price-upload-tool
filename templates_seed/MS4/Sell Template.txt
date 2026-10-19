@@ -1,0 +1,1 @@
+Condition Type	Material Number	Plant	Customer Number	Condition Amount	Currency	Price Unit	Valid Start Date	Valid End Date	Mark for Del

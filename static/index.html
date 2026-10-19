@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CCS / MS4 Price Upload Tool</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      CCS / MS4 Price Upload Tool
+      <small id="batch-info"></small>
+    </div>
+    <div class="header-spacer"></div>
+    <button class="btn" id="btn-upload">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round" width="15" height="15">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+        <polyline points="17 8 12 3 7 8"></polyline>
+        <line x1="12" y1="3" x2="12" y2="15"></line>
+      </svg>
+      <span id="upload-label">Upload Excel</span>
+    </button>
+    <button class="icon-btn" id="btn-settings" title="Settings" aria-label="Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"></circle>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+      </svg>
+    </button>
+    <button class="icon-btn" id="btn-logout" title="Log out (close the app)" aria-label="Log out">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+        <polyline points="16 17 21 12 16 7"></polyline>
+        <line x1="21" y1="12" x2="9" y2="12"></line>
+      </svg>
+    </button>
+  </header>
+
+  <main class="app-main">
+    <section class="empty-state" id="empty-state">
+      <h2>No data loaded</h2>
+      <p>Upload the Excel file that holds your HP P/N, Buy Price, Sell Price and ESC
+         columns. Any column that is not named exactly can be mapped after upload.</p>
+      <button class="btn btn-primary" id="btn-upload-empty">Upload Excel</button>
+    </section>
+
+    <div class="toolbar hidden" id="toolbar">
+      <div class="search-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input type="search" id="search" placeholder="Search every column..." autocomplete="off">
+      </div>
+      <span class="count-pill" id="count-pill"></span>
+      <div class="header-spacer"></div>
+      <button class="btn btn-ghost btn-sm" id="btn-clear-selection">Clear selection</button>
+    </div>
+
+    <div class="action-bars hidden" id="action-bars">
+      <div class="action-bar">
+        <span class="bar-label">CCS</span>
+        <button class="btn btn-sm" data-action="ccs-price">Generate CCS price upload excel</button>
+        <button class="btn btn-sm" data-action="ccs-cnp">Generate CNP to Y</button>
+        <button class="btn btn-sm" data-action="ccs-site-extend">Generate Site Extend excel</button>
+      </div>
+      <div class="action-bar">
+        <span class="bar-label">MS4</span>
+        <button class="btn btn-sm" data-action="ms4-buy">Generate MS4 buy price excel</button>
+        <button class="btn btn-sm" data-action="ms4-sell">Generate sell price excel</button>
+        <button class="btn btn-sm" data-action="ms4-esc">Generate ESC price excel</button>
+        <button class="btn btn-sm btn-primary" data-action="ms4-all">Generate all</button>
+      </div>
+    </div>
+
+    <div class="table-wrap hidden" id="table-wrap">
+      <table class="data" id="data-table">
+        <thead>
+          <tr>
+            <th class="col-check"><input type="checkbox" id="check-all" title="Select all"></th>
+            <th>HP P/N</th>
+            <th>Supplier name</th>
+            <th>MS4 vendor code</th>
+            <th>Vendor code</th>
+            <th class="num">Buy price</th>
+            <th class="num">Sell price</th>
+            <th class="num">ESC</th>
+          </tr>
+        </thead>
+        <tbody id="data-body"></tbody>
+      </table>
+    </div>
+  </main>
+
+  <div class="toasts" id="toasts"></div>
+  <input type="file" id="file-input" accept=".xlsx,.xlsm" class="hidden">
+
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>
