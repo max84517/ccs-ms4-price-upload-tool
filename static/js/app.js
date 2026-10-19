@@ -1,9 +1,12 @@
 // Bootstrap: data table, selection, search, upload flow, settings menu.
 
 import { api } from './api.js';
-import { askPositions, runAction, showUnmatched } from './generate.js';
 import {
-  openHistory, openPlants, openSites, openTemplates, openVendorMap,
+  askPositions, runAction, showCorrections, showSupplierConflicts, showUnmatched,
+} from './generate.js';
+import {
+  askPreferredPosition, openHistory, openPlants, openSites, openTemplates,
+  openVendorMap,
 } from './settings.js';
 import {
   alertBox, confirmDialog, el, openModal, setBusy, showMessage, toast,
@@ -16,6 +19,7 @@ const state = {
   query: '',
   lastIndex: null,
   theme: 'dark',
+  preferredPosition: null,
 };
 
 const dom = {
@@ -31,6 +35,31 @@ const dom = {
   fileInput: document.getElementById('file-input'),
   uploadLabel: document.getElementById('upload-label'),
 };
+
+// Must match app/version.py. The browser reads these files straight off disk,
+// so new scripts can meet a server process that started before the change.
+const EXPECTED_API_VERSION = '6';
+
+function warnStaleServer(actual) {
+  openModal({
+    title: 'Restart the application',
+    width: 'narrow',
+    body: [
+      alertBox('error',
+        'The server running in the background was started before the last update, '
+        + 'so saving and generating will fail.'),
+      el('p', { style: 'margin:0' }, [
+        'Close the ',
+        el('b', { text: 'start.bat' }),
+        ' window and run it again, then reload this page. Nothing is lost - all '
+        + 'your data is in the database.',
+      ]),
+      el('p', { class: 'muted', style: 'margin:10px 0 0;font-size:12px',
+        text: `Page expects API ${EXPECTED_API_VERSION}, server reports ${actual || 'an older build'}.` }),
+    ],
+    buttons: [{ label: 'OK', kind: 'primary' }],
+  });
+}
 
 const SEARCH_FIELDS = [
   'hppn', 'supplier_name', 'ms4_vendor_code', 'vendor_code',
@@ -59,7 +88,7 @@ function renderTable() {
   if (!state.filtered.length) {
     frag.append(el('tr', {}, [
       el('td', {
-        colspan: 8,
+        colspan: 9,
         class: 'muted',
         style: 'padding:26px;text-align:center',
         text: state.rows.length ? 'No rows match your search.' : 'No rows.',
@@ -77,15 +106,21 @@ function renderTable() {
       select(index, e.shiftKey ? 'extend' : 'toggle');
     });
 
+    // Columns are fixed width, so anything long is clipped - the title makes
+    // the full value readable on hover.
+    const cell = (value, extra = {}) =>
+      el('td', { text: value || '-', title: value || '', ...extra });
+
     const tr = el('tr', { class: checked ? 'selected' : '' }, [
       el('td', { class: 'col-check' }, [cb]),
-      el('td', { text: row.hppn }),
-      el('td', { text: row.supplier_name || '-' }),
-      el('td', { text: row.ms4_vendor_code || '-' }),
-      el('td', { text: row.vendor_code || '-' }),
+      cell(row.hppn),
+      cell(row.supplier_name),
+      cell(row.ms4_vendor_code),
+      cell(row.vendor_code),
       el('td', { class: 'num', text: row.buy_price || '' }),
       el('td', { class: 'num', text: row.sell_price || '' }),
       el('td', { class: 'num', text: row.esc || '' }),
+      el('td', { class: 'cell-fill' }),
     ]);
     tr.addEventListener('click', (e) => {
       if (e.shiftKey) select(index, 'range');
@@ -174,6 +209,7 @@ function mappingDialog(parsed) {
   return new Promise((resolve) => {
     const fields = [
       ['hppn', 'HP P/N'],
+      ['supplier', 'Supplier'],
       ['buy_price', 'Buy Price'],
       ['sell_price', 'Sell Price'],
       ['esc', 'ESC'],
@@ -249,7 +285,27 @@ function mappingDialog(parsed) {
   });
 }
 
+function promptPreferredPosition(firstRun) {
+  return askPreferredPosition({
+    current: state.preferredPosition,
+    firstRun,
+    onChanged: (position, rows) => {
+      state.preferredPosition = position;
+      if (state.rows.length && rows) {
+        state.rows = rows;
+        renderTable();
+      }
+    },
+  });
+}
+
+async function ensurePreferredPosition() {
+  if (state.preferredPosition !== null) return true;
+  return promptPreferredPosition(true);
+}
+
 async function handleFile(file) {
+  if (!await ensurePreferredPosition()) return;
   setBusy(true, 'Reading the workbook...');
   let parsed;
   try {
@@ -286,6 +342,7 @@ async function handleFile(file) {
     if (result.ok) {
       setRows(result.rows, result.batch);
       toast(`Loaded ${result.rows.length} rows from ${result.batch.filename}.`);
+      showCorrections(result.corrections || []);
       return;
     }
     if (result.kind === 'ambiguous_vendors') {
@@ -293,6 +350,14 @@ async function handleFile(file) {
       if (!picked) return;
       choices = { ...choices, ...picked };
       continue;
+    }
+    if (result.kind === 'no_preferred_position') {
+      if (!await promptPreferredPosition(true)) return;
+      continue;
+    }
+    if (result.kind === 'supplier_conflicts') {
+      showSupplierConflicts(result.corrections);
+      return;
     }
     showUnmatched(result.unmatched);
     return;
@@ -444,7 +509,14 @@ document.getElementById('action-bars').addEventListener('click', (e) => {
   try {
     const data = await api.get('/api/state');
     await setTheme(data.theme || 'dark', false);
+    state.preferredPosition = data.preferred_position ?? null;
     setRows(data.rows, data.batch);
+
+    if (data.api_version !== EXPECTED_API_VERSION) {
+      warnStaleServer(data.api_version);
+      return;
+    }
+    if (state.preferredPosition === null) await promptPreferredPosition(true);
   } catch (err) {
     showMessage('Could not start', err.message || String(err), 'error');
   }

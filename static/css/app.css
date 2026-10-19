@@ -297,8 +297,42 @@ table.data tbody tr { cursor: default; }
 table.data tbody tr:hover { background: var(--row-hover); }
 table.data tbody tr.selected { background: var(--row-selected); }
 
-.col-check { width: 38px; text-align: center; }
-.num { text-align: right; font-variant-numeric: tabular-nums; }
+.col-check { text-align: center; }
+
+/* The header rule above is more specific than a bare .num, so numeric
+   headings need naming explicitly or they stay left while the cells go right. */
+.num,
+table.data thead th.num { text-align: right; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* ---------- main data table ----------
+   Fixed layout with each data column sized to the longest value it has to
+   hold, so nothing is stretched and the gaps stay tight whatever the window
+   size. The table still spans the panel: the trailing c-fill column is the
+   only one without a width, so it absorbs all the leftover space on its own
+   instead of the browser sharing it out between every column.
+   The data columns add up to 912px; below that the wrapper scrolls. */
+#data-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 912px;
+}
+
+#data-table .c-check    { width: 42px; }
+#data-table .c-pn       { width: 132px; }
+#data-table .c-supplier { width: 170px; }
+#data-table .c-ms4      { width: 138px; }
+#data-table .c-vendor   { width: 142px; }
+#data-table .c-price    { width: 96px; }
+#data-table .c-fill     { width: auto; }
+#data-table .cell-fill  { padding: 0; }
+
+/* Fixed columns clip rather than push, so overlong values get an ellipsis. */
+#data-table th,
+#data-table td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .muted { color: var(--text-faint); }
 
 .empty-state {

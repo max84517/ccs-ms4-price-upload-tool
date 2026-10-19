@@ -61,6 +61,8 @@ CREATE TABLE IF NOT EXISTS upload_row (
     batch_id        INTEGER NOT NULL REFERENCES upload_batch(id) ON DELETE CASCADE,
     row_index       INTEGER NOT NULL,
     hppn            TEXT NOT NULL DEFAULT '',
+    -- The Supplier as it came from the uploaded file; it wins over the map.
+    supplier        TEXT NOT NULL DEFAULT '',
     buy_price       TEXT NOT NULL DEFAULT '',
     sell_price      TEXT NOT NULL DEFAULT '',
     esc             TEXT NOT NULL DEFAULT '',
@@ -111,6 +113,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     columns = {r["name"] for r in conn.execute("PRAGMA table_info(upload_row)")}
     if columns and "chosen_position" not in columns:
         conn.execute("ALTER TABLE upload_row ADD COLUMN chosen_position INTEGER")
+    if columns and "supplier" not in columns:
+        conn.execute(
+            "ALTER TABLE upload_row ADD COLUMN supplier TEXT NOT NULL DEFAULT ''"
+        )
 
     # The map used to allow one entry per letter; it now allows one entry per
     # letter *and position*, so the old unique index has to be rebuilt.

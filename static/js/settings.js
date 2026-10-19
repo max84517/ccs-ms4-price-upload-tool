@@ -40,6 +40,60 @@ function errorText(err) {
   return err && err.message ? err.message : String(err);
 }
 
+// ------------------------------------------------------------------ preferred position
+
+/**
+ * The position tried before any other when matching a part number. It has to
+ * be set before data can be loaded, so the first-run version says so.
+ * Resolves to true once saved, false if the user backs out.
+ */
+export function askPreferredPosition({ current = null, firstRun = false, onChanged }) {
+  return new Promise((resolve) => {
+    const select = el('select');
+    for (const p of [1, 2, 3]) {
+      select.append(el('option', {
+        value: p, text: `Position ${p}`, selected: current === p,
+      }));
+    }
+    let settled = false;
+    openModal({
+      title: 'Preferred position',
+      width: 'narrow',
+      body: [
+        alertBox(firstRun ? 'warn' : 'info',
+          'Which of the 3 characters after the "-" in a part number should be matched '
+          + 'first? For Q12345-S23, position 1 is "S" and position 2 is "2". Rules at '
+          + 'other positions are only tried when the preferred one finds nothing.'
+          + (firstRun ? ' This has to be set before data can be loaded.' : '')),
+        el('div', { class: 'form-grid' }, [
+          el('label', { text: 'Match first at' }), select,
+        ]),
+      ],
+      buttons: [
+        { label: 'Cancel', onClick: (close) => { settled = true; close(); resolve(false); } },
+        {
+          label: 'Save',
+          kind: 'primary',
+          onClick: async (close) => {
+            const position = Number(select.value);
+            try {
+              const r = await api.put('/api/settings/preferred-position', { position });
+              settled = true;
+              close();
+              onChanged?.(position, r.rows);
+              toast(`Part numbers are matched at position ${position} first.`);
+              resolve(true);
+            } catch (err) {
+              showMessage('Could not save', errorText(err), 'error');
+            }
+          },
+        },
+      ],
+      onClose: () => { if (!settled) resolve(false); },
+    });
+  });
+}
+
 // ------------------------------------------------------------------ vendor map
 
 async function vendorForm(existing, defaultPosition) {
@@ -254,6 +308,31 @@ export async function openVendorMap(onChanged) {
   let rows = await api.get('/api/vendor-map');
   let query = '';
   let dirty = false;
+  let preferred = (await api.get('/api/state')).preferred_position;
+
+  const preferredText = el('b');
+  const paintPreferred = () => {
+    preferredText.textContent = preferred ? `position ${preferred}` : 'not set yet';
+  };
+  paintPreferred();
+
+  const preferredRow = el('div', { class: 'field-row' }, [
+    el('span', { class: 'muted' }, ['Part numbers are matched first at ', preferredText, '.']),
+    el('button', {
+      class: 'btn btn-sm',
+      text: preferred ? 'Change' : 'Set now',
+      onClick: async (e) => {
+        const saved = await askPreferredPosition({
+          current: preferred,
+          onChanged: (position) => { preferred = position; },
+        });
+        if (!saved) return;
+        paintPreferred();
+        e.currentTarget.textContent = 'Change';
+        dirty = true;
+      },
+    }),
+  ]);
 
   const tbody = el('tbody');
   const table = el('table', { class: 'data' }, [
@@ -368,7 +447,11 @@ export async function openVendorMap(onChanged) {
   openModal({
     title: 'HPPN / Vendor Map',
     width: 'wide',
-    body: [search.node, el('div', { class: 'scroll-box' }, [table])],
+    body: [
+      preferredRow,
+      search.node,
+      el('div', { class: 'scroll-box' }, [table]),
+    ],
     buttons: [{ label: 'Close', kind: 'primary' }],
     onClose: () => { if (dirty) onChanged?.(); },
   });

@@ -273,6 +273,103 @@ export function showUnmatched(unmatched) {
   });
 }
 
+/**
+ * What the Supplier cross-check changed. The file is authoritative, so these
+ * are already applied by the time this is shown.
+ */
+export function showCorrections(corrections) {
+  const fixed = corrections.filter((c) => c.status === 'corrected');
+  const blank = corrections.filter((c) => c.status === 'blank');
+  if (!fixed.length && !blank.length) return null;
+
+  const body = [];
+  if (fixed.length) {
+    body.push(alertBox('warn',
+      `${fixed.length} part number${fixed.length === 1 ? '' : 's'} had a Supplier that did not ` +
+      'match the rule found by position. The file wins, so those rows now use the vendor ' +
+      'codes of the Supplier named in the file.'));
+    body.push(el('div', { class: 'scroll-box', style: blank.length ? 'margin-bottom:14px' : '' }, [
+      el('table', { class: 'data' }, [
+        el('thead', {}, [el('tr', {}, [
+          el('th', { text: 'Row' }),
+          el('th', { text: 'HP P/N' }),
+          el('th', { text: 'Matched by position' }),
+          el('th', { text: 'Supplier in file' }),
+          el('th', { text: 'Vendor codes now used' }),
+        ])]),
+        el('tbody', {}, fixed.map((c) => el('tr', {}, [
+          el('td', { class: 'muted', text: String(c.row_index ?? '') }),
+          el('td', { text: c.hppn }),
+          el('td', {}, [
+            el('div', { text: c.mapped_supplier || '(no name)' }),
+            el('div', { class: 'muted', style: 'font-size:12px',
+              text: `position ${c.position} - ${c.mapped_ms4 || '-'} / ${c.mapped_vendor || '-'}` }),
+          ]),
+          el('td', { text: c.uploaded_supplier }),
+          el('td', { text: `${c.new_ms4 || '-'} / ${c.new_vendor || '-'}` }),
+        ]))),
+      ]),
+    ]));
+  }
+
+  if (blank.length) {
+    body.push(alertBox('info',
+      `${blank.length} row${blank.length === 1 ? ' has' : 's have'} no Supplier in the file, ` +
+      'so there was nothing to cross-check. The rule found by position was kept.'));
+    body.push(el('div', { class: 'scroll-box' }, [
+      el('table', { class: 'data' }, [
+        el('thead', {}, [el('tr', {}, [
+          el('th', { text: 'Row' }),
+          el('th', { text: 'HP P/N' }),
+          el('th', { text: 'Supplier used' }),
+        ])]),
+        el('tbody', {}, blank.map((c) => el('tr', {}, [
+          el('td', { class: 'muted', text: String(c.row_index ?? '') }),
+          el('td', { text: c.hppn }),
+          el('td', { text: c.mapped_supplier || '(no name)' }),
+        ]))),
+      ]),
+    ]));
+  }
+
+  return openModal({
+    title: 'Supplier cross-check',
+    width: 'wide',
+    body,
+    buttons: [{ label: 'OK', kind: 'primary' }],
+  });
+}
+
+export function showSupplierConflicts(corrections) {
+  openModal({
+    title: 'Supplier cannot be resolved',
+    width: 'wide',
+    body: [
+      alertBox('error',
+        `${corrections.length} part number${corrections.length === 1 ? '' : 's'} name a Supplier ` +
+        'that the HPPN / Vendor Map cannot turn into vendor codes. Add the Supplier to the map ' +
+        'and try again. Nothing has been generated.'),
+      el('div', { class: 'scroll-box' }, [
+        el('table', { class: 'data' }, [
+          el('thead', {}, [el('tr', {}, [
+            el('th', { text: 'Row' }),
+            el('th', { text: 'HP P/N' }),
+            el('th', { text: 'Supplier in file' }),
+            el('th', { text: 'Problem' }),
+          ])]),
+          el('tbody', {}, corrections.map((c) => el('tr', {}, [
+            el('td', { class: 'muted', text: String(c.row_index ?? '') }),
+            el('td', { text: c.hppn }),
+            el('td', { text: c.uploaded_supplier || '(blank)' }),
+            el('td', { text: c.message }),
+          ]))),
+        ]),
+      ]),
+    ],
+    buttons: [{ label: 'Close', kind: 'primary' }],
+  });
+}
+
 export function showPriceProblems(problems) {
   const body = el('div', { class: 'scroll-box' }, [
     el('table', { class: 'data' }, [
@@ -343,6 +440,7 @@ async function send(url, payload, busyLabel, onRowsChanged, retry = true) {
       'Some part numbers still match more than one rule. Check the HPPN / Vendor Map.',
       'error',
     );
+    else if (p.kind === 'supplier_conflicts') showSupplierConflicts(p.corrections);
     else if (p.kind === 'unmatched_vendors') showUnmatched(p.unmatched);
     else if (p.kind === 'price_problems') showPriceProblems(p.problems);
     else showMessage('Could not generate', JSON.stringify(p), 'error');

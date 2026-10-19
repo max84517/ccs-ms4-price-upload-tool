@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Table layout comparison</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <style>
+    body { overflow: auto; display: block; padding: 0 20px 60px; }
+    h1 { font-size: 19px; margin: 24px 0 4px; }
+    h2 { font-size: 15px; margin: 30px 0 4px; }
+    .note { color: var(--text-dim); margin: 0 0 10px; max-width: 760px; line-height: 1.5; }
+    .readout {
+      position: sticky; top: 0; z-index: 5; background: var(--bg-raised);
+      border-bottom: 1px solid var(--border); padding: 12px 0; margin-bottom: 8px;
+    }
+    .readout b { font-size: 17px; color: var(--accent); }
+    .wrap { border: 1px solid var(--border); border-radius: 9px; background: var(--bg-raised); overflow: auto; }
+
+    /* ---- A: what is in the app right now (fill, capped at 1240) ---- */
+    #A { max-width: 1240px; }
+    #A table { table-layout: fixed; width: 100%; min-width: 940px; }
+    #A .c-check { width: 3.2%; } #A .c-pn { width: 15%; }
+    #A .c-supplier { width: 18.8%; } #A .c-ms4 { width: 16%; }
+    #A .c-vendor { width: 16%; } #A .c-price { width: 10.333%; }
+
+    /* ---- B: columns sized to the content, panel stops where the data stops ---- */
+    #B { width: fit-content; max-width: 100%; }
+    #B table { table-layout: fixed; width: 912px; }
+    #B .c-check { width: 42px; } #B .c-pn { width: 132px; }
+    #B .c-supplier { width: 170px; } #B .c-ms4 { width: 138px; }
+    #B .c-vendor { width: 142px; } #B .c-price { width: 96px; }
+
+    /* ---- C: content widths, but the row stretches to the full panel ---- */
+    #C table { table-layout: fixed; width: 100%; min-width: 912px; }
+    #C .c-check { width: 42px; } #C .c-pn { width: 132px; }
+    #C .c-supplier { width: 170px; } #C .c-ms4 { width: 138px; }
+    #C .c-vendor { width: 142px; } #C .c-price { width: 96px; }
+    #C .c-fill { width: auto; }
+
+    table.data th, table.data td { overflow: hidden; text-overflow: ellipsis; }
+  </style>
+</head>
+<body>
+  <div class="readout">
+    <h1>Table layout comparison</h1>
+    <p class="note" style="margin:0">
+      Your window is <b id="w">?</b> px wide. Scroll through A, B and C and tell me
+      which one looks right - then I apply it to the app.
+    </p>
+  </div>
+
+  <h2>A &mdash; what the app does now</h2>
+  <p class="note">
+    Columns are percentages of the panel width, so they stretch until the 1240px
+    ceiling. If your window is narrower than that, the ceiling does nothing, which
+    is why this may look unchanged from before.
+  </p>
+  <div class="wrap" id="A"></div>
+
+  <h2>B &mdash; columns sized to the content</h2>
+  <p class="note">
+    Each column is as wide as its longest value needs. The table stops where the
+    data stops, so nothing is stretched and the gaps are as small as they can be.
+    Empty space sits outside the panel.
+  </p>
+  <div class="wrap" id="B"></div>
+
+  <h2>C &mdash; content widths, panel still full width</h2>
+  <p class="note">
+    Same column widths as B, but the panel keeps the full width and the leftover
+    becomes one empty column on the right, so row highlighting still spans the
+    whole row.
+  </p>
+  <div class="wrap" id="C"></div>
+
+  <script>
+    // Invented values with realistic shapes - this file is in version control.
+    const ROWS = [
+      ['Q10001-AA1', 'Supplier Alpha', '100000001', '0020000001', '0.47', '0.49', '0.47'],
+      ['Q10001-BB1', 'Supplier Beta', '100000002', '0020000002', '0.47', '0.49', '0.47'],
+      ['Q10001-CC1', 'Supplier Gamma', '100000003', '0020000003', '0.47', '0.49', '0.47'],
+      ['Q20002-CC2', 'Supplier Gamma', '100000003', '0020000003', '12.75', '13.40', '0.47'],
+      ['Q20002-DD1', 'A Longer Supplier Name', '100000004', '0020000004', '21.75', '22.40', '1.25'],
+    ];
+    const HEADS = ['HP P/N', 'Supplier name', 'MS4 vendor code', 'Vendor code',
+                   'Buy price', 'Sell price', 'ESC'];
+
+    function build(host, withFiller) {
+      const cols = ['c-check', 'c-pn', 'c-supplier', 'c-ms4', 'c-vendor',
+                    'c-price', 'c-price', 'c-price'];
+      if (withFiller) cols.push('c-fill');
+      const colgroup = cols.map((c) => `<col class="${c}">`).join('');
+      const heads = HEADS.map((h, i) =>
+        `<th class="${i >= 4 ? 'num' : ''}">${h}</th>`).join('');
+      const body = ROWS.map((r, n) => `
+        <tr class="${n === 0 ? 'selected' : ''}">
+          <td class="col-check"><input type="checkbox" ${n === 0 ? 'checked' : ''}></td>
+          ${r.map((v, i) => `<td class="${i >= 4 ? 'num' : ''}">${v}</td>`).join('')}
+          ${withFiller ? '<td></td>' : ''}
+        </tr>`).join('');
+      host.innerHTML = `<table class="data"><colgroup>${colgroup}</colgroup>
+        <thead><tr><th class="col-check"><input type="checkbox"></th>${heads}
+        ${withFiller ? '<th></th>' : ''}</tr></thead><tbody>${body}</tbody></table>`;
+    }
+
+    build(document.getElementById('A'), false);
+    build(document.getElementById('B'), false);
+    build(document.getElementById('C'), true);
+
+    const show = () => { document.getElementById('w').textContent = window.innerWidth; };
+    show();
+    addEventListener('resize', show);
+  </script>
+</body>
+</html>

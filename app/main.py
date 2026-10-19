@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import ingest, template_store
+from .version import API_VERSION
 from .db import BASE_DIR, get_setting, init_db, session, set_setting
 from .generators import ccs as ccs_gen
 from .generators import ms4 as ms4_gen
@@ -78,7 +79,8 @@ def current_batch() -> dict | None:
         if batch is None:
             return None
         rows = conn.execute(
-            "SELECT id, row_index, hppn, buy_price, sell_price, esc, chosen_position "
+            "SELECT id, row_index, hppn, supplier, buy_price, sell_price, esc, "
+            "chosen_position "
             "FROM upload_row WHERE batch_id = ? ORDER BY row_index, id",
             (batch["id"],),
         ).fetchall()
@@ -95,9 +97,28 @@ class AmbiguousVendors(Exception):
         self.ambiguous = ambiguous
 
 
+class SupplierConflicts(Exception):
+    def __init__(self, corrections: list[dict]):
+        self.corrections = corrections
+
+
 class PriceProblems(Exception):
     def __init__(self, problems: list[dict]):
         self.problems = problems
+
+
+def preferred_position() -> int | None:
+    value = get_setting("preferred_position")
+    return int(value) if value else None
+
+
+def require_preferred_position() -> int:
+    position = preferred_position()
+    if position is None:
+        raise _bad_request(
+            "Set the preferred position in Settings > HPPN / Vendor Map first."
+        )
+    return position
 
 
 def decorated_rows() -> list[dict]:
@@ -105,7 +126,9 @@ def decorated_rows() -> list[dict]:
     data = current_batch()
     if data is None:
         return []
-    resolved, _unmatched, _ambiguous = ingest.resolve_vendors(data["rows"])
+    resolved, _unmatched, _ambiguous, _corrections = ingest.resolve_vendors(
+        data["rows"], preferred_position=preferred_position()
+    )
     return resolved
 
 
@@ -125,9 +148,14 @@ def selected_rows(row_ids: list[int]) -> list[dict]:
         )
 
     # Re-check against the live map: it may have changed since the upload.
-    rows, unmatched, ambiguous = ingest.resolve_vendors(raw)
+    rows, unmatched, ambiguous, corrections = ingest.resolve_vendors(
+        raw, preferred_position=require_preferred_position()
+    )
     if ambiguous:
         raise AmbiguousVendors(ambiguous)
+    conflicts = [c for c in corrections if c["status"] == "error"]
+    if conflicts:
+        raise SupplierConflicts(conflicts)
     if unmatched:
         raise UnmatchedVendors(unmatched)
     return rows
@@ -155,6 +183,18 @@ def _ambiguous_handler(_request, exc: AmbiguousVendors) -> JSONResponse:
     )
 
 
+@app.exception_handler(SupplierConflicts)
+def _supplier_handler(_request, exc: SupplierConflicts) -> JSONResponse:
+    return JSONResponse(
+        status_code=200,
+        content={
+            "ok": False,
+            "kind": "supplier_conflicts",
+            "corrections": exc.corrections,
+        },
+    )
+
+
 @app.exception_handler(PriceProblems)
 def _price_handler(_request, exc: PriceProblems) -> JSONResponse:
     return JSONResponse(
@@ -172,15 +212,28 @@ def _price_handler(_request, exc: PriceProblems) -> JSONResponse:
 def api_state() -> dict:
     data = current_batch()
     return {
+        "api_version": API_VERSION,
         "theme": get_setting("theme", "dark"),
         "batch": data["batch"] if data else None,
         "rows": decorated_rows(),
         "vendor_map_count": len(ingest.load_vendor_map()),
+        "preferred_position": preferred_position(),
     }
 
 
 class ThemeBody(BaseModel):
     theme: str
+
+
+class PreferredPositionBody(BaseModel):
+    position: int = Field(ge=1, le=3)
+
+
+@app.put("/api/settings/preferred-position")
+def api_set_preferred_position(body: PreferredPositionBody) -> dict:
+    """The position tried before any other when matching a part number."""
+    set_setting("preferred_position", str(body.position))
+    return {"ok": True, "position": body.position, "rows": decorated_rows()}
 
 
 @app.put("/api/settings/theme")
@@ -226,11 +279,20 @@ def api_upload_confirm(body: ConfirmBody) -> dict:
     except ValueError as exc:
         raise _bad_request(str(exc)) from exc
 
-    resolved, unmatched, ambiguous = ingest.resolve_vendors(rows, body.choices)
+    position = preferred_position()
+    if position is None:
+        return {"ok": False, "kind": "no_preferred_position"}
+
+    resolved, unmatched, ambiguous, corrections = ingest.resolve_vendors(
+        rows, body.choices, preferred_position=position
+    )
     # Nothing is stored until both questions are settled; the token stays alive
     # so the user can answer and post again without re-picking the file.
     if ambiguous:
         return {"ok": False, "kind": "ambiguous_vendors", "ambiguous": ambiguous}
+    conflicts = [c for c in corrections if c["status"] == "error"]
+    if conflicts:
+        return {"ok": False, "kind": "supplier_conflicts", "corrections": conflicts}
     if unmatched:
         return {"ok": False, "kind": "unmatched_vendors", "unmatched": unmatched}
 
@@ -250,13 +312,14 @@ def api_upload_confirm(body: ConfirmBody) -> dict:
         batch_id = cur.lastrowid
         conn.executemany(
             "INSERT INTO upload_row "
-            "(batch_id, row_index, hppn, buy_price, sell_price, esc, chosen_position) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(batch_id, row_index, hppn, supplier, buy_price, sell_price, esc, "
+            "chosen_position) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     batch_id,
                     r["row_index"],
                     r["hppn"],
+                    r["supplier"],
                     r["buy_price"],
                     r["sell_price"],
                     r["esc"],
@@ -268,7 +331,13 @@ def api_upload_confirm(body: ConfirmBody) -> dict:
 
     ingest.drop_pending(body.token)
     data = current_batch()
-    return {"ok": True, "batch": data["batch"], "rows": decorated_rows()}
+    return {
+        "ok": True,
+        "batch": data["batch"],
+        "rows": decorated_rows(),
+        # Supplier mismatches that were fixed, plus rows with a blank Supplier.
+        "corrections": corrections,
+    }
 
 
 class ChoicesBody(BaseModel):
@@ -837,6 +906,22 @@ def api_shutdown() -> dict:
 
     threading.Timer(0.5, stop).start()
     return {"ok": True}
+
+
+@app.middleware("http")
+async def no_cache_for_pages(request, call_next):
+    """Never let the browser cache the page or its assets.
+
+    This runs on one machine, so there is nothing to gain from caching, and a
+    stale stylesheet after an update is impossible to tell apart from a change
+    that did not work.
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+    return response
 
 
 @app.get("/")

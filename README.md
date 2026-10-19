@@ -15,22 +15,32 @@ Requirements: Python 3.10+ on PATH. Dependencies are in `requirements.txt`
 
 ## What it does
 
-1. **Upload** an Excel file. The tool looks for `HP P/N`, `Buy Price`,
-   `Sell Price` and `ESC`. Any column it cannot find is asked for in a mapping
-   dialog, where each source column can only be used once.
-2. **Vendor matching.** The character at a rule's position within the three
-   characters after the `-` in the part number (for `Q12345-S23`, position 1 is
-   `S`, position 2 is `2`) is looked up in the HPPN / Vendor Map. The map may
-   hold rules at different positions, so a part number can match more than one;
-   when that happens the tool lists those part numbers and asks which rule to
-   use for each, with a "prefer position N - apply to all" shortcut. The choice
-   is stored with the data and reused later. If a part number ends up without
-   both an MS4 vendor code and a vendor code, a scrollable list of the
-   offenders is shown and nothing is loaded.
-3. **Pick rows** in the main table. Search filters every column as you type.
+0. **Set the preferred position** the first time the app opens - which of the
+   three characters after the `-` in a part number is matched before any other.
+   Nothing can be loaded until this is set; change it later under
+   Settings > HPPN / Vendor Map.
+1. **Upload** an Excel file. The tool looks for `HP P/N`, `Supplier`,
+   `Buy Price`, `Sell Price` and `ESC`. Any column it cannot find is asked for
+   in a mapping dialog, where each source column can only be used once.
+2. **Vendor matching**, in this order: a rule the user already picked for that
+   part number, then the **preferred position**, then the remaining positions.
+   A part number that matches at the preferred position is never ambiguous.
+   If the preferred position finds nothing and two other positions both match,
+   the tool lists those part numbers and asks which rule to use for each, with
+   a "prefer position N - apply to all" shortcut; the choice is stored with the
+   data. If a part number ends up without both an MS4 vendor code and a vendor
+   code, a scrollable list of the offenders is shown and nothing is loaded.
+3. **Supplier cross-check.** The Supplier from the file is compared with the
+   matched rule, ignoring case and surplus spaces. The file wins: on a mismatch
+   the row switches to the rule belonging to the file's Supplier - vendor codes
+   included - and every change is listed in a report. A blank Supplier cell is
+   listed as a reminder and keeps the matched rule. A Supplier the map does not
+   know, or one that appears twice with different vendor codes, stops the load
+   and is reported.
+4. **Pick rows** in the main table. Search filters every column as you type.
    Select all with the header checkbox, ctrl-click to toggle one row,
    shift-click to take a range.
-4. **Generate.** The CCS and MS4 action bars appear once something is selected.
+5. **Generate.** The CCS and MS4 action bars appear once something is selected.
 
 ## Outputs
 
@@ -66,8 +76,8 @@ Requirements: Python 3.10+ on PATH. Dependencies are in `requirements.txt`
 
 ## Settings (gear icon)
 
-- **HPPN / Vendor Map** - alphabet, position, supplier name, MS4 vendor code,
-  vendor code. Rules may use different positions, and the same letter may
+- **HPPN / Vendor Map** - the preferred position, plus alphabet, position,
+  supplier name, MS4 vendor code and vendor code per rule. Rules may use different positions, and the same letter may
   appear once per position. Only the same letter *and* position twice is
   refused. Changing the map after data is loaded can create a new ambiguity;
   the next generate then asks which rule to use and carries on.
@@ -106,7 +116,7 @@ templates_seed/      the shipped copies of the six templates
 data/app.db          created on first run
 ```
 
-`data/app.db` holds the vendor map, sites, plants, templates, the most recent
-upload (including which rule was chosen for each part number) and the
-generation history. Delete it to start from scratch. A database made by an
+`data/app.db` holds the preferred position, the vendor map, sites, plants,
+templates, the most recent upload (including the Supplier from the file and
+which rule was chosen for each part number) and the generation history. Delete it to start from scratch. A database made by an
 older build is migrated on startup, keeping its contents.

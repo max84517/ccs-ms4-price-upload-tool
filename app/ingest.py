@@ -15,6 +15,7 @@ from .db import session
 # Logical field -> label shown in the UI.
 REQUIRED_FIELDS = [
     ("hppn", "HP P/N"),
+    ("supplier", "Supplier"),
     ("buy_price", "Buy Price"),
     ("sell_price", "Sell Price"),
     ("esc", "ESC"),
@@ -24,6 +25,7 @@ FIELD_LABELS = dict(REQUIRED_FIELDS)
 # Normalised header spellings that auto-map to a field without asking the user.
 _AUTO_HEADERS = {
     "hppn": {"hppn", "hppartno", "hppartnumber"},
+    "supplier": {"supplier", "suppliername"},
     "buy_price": {"buyprice"},
     "sell_price": {"sellprice"},
     "esc": {"esc"},
@@ -156,6 +158,7 @@ def build_rows(pending: dict, mapping: dict[str, int]) -> list[dict]:
             {
                 "row_index": i + 2,  # 1-based sheet row; the header is row 1
                 "hppn": hppn,
+                "supplier": value("supplier"),
                 "buy_price": value("buy_price"),
                 "sell_price": value("sell_price"),
                 "esc": value("esc"),
@@ -202,32 +205,65 @@ def _candidate(entry: dict) -> dict:
     }
 
 
+def normalise_supplier(name: str) -> str:
+    """Supplier names are compared ignoring case and surplus whitespace."""
+    return " ".join((name or "").split()).casefold()
+
+
+def _supplier_index(entries: list[dict]) -> dict[str, list[dict]]:
+    index: dict[str, list[dict]] = {}
+    for entry in entries:
+        key = normalise_supplier(entry["supplier_name"])
+        if key:
+            index.setdefault(key, []).append(entry)
+    return index
+
+
+def _apply(out: dict, entry: dict) -> None:
+    out["supplier_name"] = entry["supplier_name"]
+    out["ms4_vendor_code"] = entry["ms4_vendor_code"].strip()
+    out["vendor_code"] = entry["vendor_code"].strip()
+    out["matched_position"] = entry["position"]
+
+
 def resolve_vendors(
-    rows: list[dict], choices: dict[str, int] | None = None
-) -> tuple[list[dict], list[dict], list[dict]]:
+    rows: list[dict],
+    choices: dict[str, int] | None = None,
+    preferred_position: int | None = None,
+) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
     """Attach supplier/vendor codes to each row.
 
-    The map may hold entries at different positions, so one part number can
-    match more than one rule. Those are returned in `ambiguous` (one entry per
-    part number) for the user to decide; a decision is supplied either through
-    `choices` or through a row's own `chosen_position`.
+    Matching order for a part number:
 
-    Returns (resolved_rows, unmatched, ambiguous).
+    1. a rule the user already picked for it (`choices` / `chosen_position`),
+    2. the preferred position configured in the HPPN / Vendor Map,
+    3. the remaining positions - one match is used, several are `ambiguous`.
+
+    The Supplier column from the uploaded file is then cross-checked against
+    the matched rule. The file wins: on a mismatch the row switches to the rule
+    that belongs to the file's Supplier, codes included, and the change is
+    reported in `corrections`.
+
+    Returns (resolved_rows, unmatched, ambiguous, corrections).
     """
     entries = load_vendor_map()
     by_key = {(e["position"], e["alphabet"].upper()): e for e in entries}
     positions = sorted({e["position"] for e in entries})
+    by_supplier = _supplier_index(entries)
     choices = choices or {}
 
     resolved: list[dict] = []
     unmatched: list[dict] = []
     ambiguous: list[dict] = []
+    corrections: list[dict] = []
     seen_ambiguous: set[str] = set()
 
     for row in rows:
         hppn = row["hppn"]
         out = dict(row)
-        out.update(supplier_name="", ms4_vendor_code="", vendor_code="", matched_position=None)
+        out.update(
+            supplier_name="", ms4_vendor_code="", vendor_code="", matched_position=None
+        )
 
         if not entries:
             unmatched.append({**out, "reason": "HPPN/Vendor Map is empty."})
@@ -240,37 +276,27 @@ def resolve_vendors(
             resolved.append(out)
             continue
 
-        candidates = []
-        tried = []
-        for position in positions:
+        def entry_at(position: int) -> dict | None:
             if len(suffix) < position:
-                continue
-            letter = suffix[position - 1].upper()
-            tried.append(f"'{letter}' at position {position}")
-            entry = by_key.get((position, letter))
-            if entry is not None:
-                candidates.append(entry)
-
-        if not candidates:
-            reason = (
-                f"Fewer than {positions[0]} characters after '-'."
-                if not tried
-                else "No map entry for " + " or ".join(tried) + "."
-            )
-            unmatched.append({**out, "reason": reason})
-            resolved.append(out)
-            continue
+                return None
+            return by_key.get((position, suffix[position - 1].upper()))
 
         picked = None
-        if len(candidates) == 1:
-            picked = candidates[0]
-        else:
-            wanted = choices.get(hppn, row.get("chosen_position"))
-            if wanted is not None:
-                picked = next(
-                    (c for c in candidates if c["position"] == wanted), None
-                )
-            if picked is None:
+        wanted = choices.get(hppn, row.get("chosen_position"))
+        if wanted is not None:
+            picked = entry_at(wanted)
+
+        # The preferred position is tried before anything else, so a part that
+        # matches there is never ambiguous.
+        if picked is None and preferred_position is not None:
+            picked = entry_at(preferred_position)
+
+        if picked is None:
+            others = [p for p in positions if p != preferred_position]
+            candidates = [e for e in (entry_at(p) for p in others) if e is not None]
+            if len(candidates) == 1:
+                picked = candidates[0]
+            elif len(candidates) > 1:
                 if hppn not in seen_ambiguous:
                     seen_ambiguous.add(hppn)
                     ambiguous.append(
@@ -283,12 +309,88 @@ def resolve_vendors(
                 resolved.append(out)
                 continue
 
-        out["supplier_name"] = picked["supplier_name"]
-        out["ms4_vendor_code"] = picked["ms4_vendor_code"].strip()
-        out["vendor_code"] = picked["vendor_code"].strip()
-        out["matched_position"] = picked["position"]
-        if len(candidates) > 1:
+        if picked is None:
+            tried = []
+            for position in positions:
+                if len(suffix) >= position:
+                    tried.append(
+                        f"'{suffix[position - 1].upper()}' at position {position}"
+                    )
+            reason = (
+                f"Fewer than {positions[0]} characters after '-'."
+                if not tried
+                else "No map entry for " + " or ".join(tried) + "."
+            )
+            unmatched.append({**out, "reason": reason})
+            resolved.append(out)
+            continue
+
+        _apply(out, picked)
+        if wanted is not None or picked["position"] != preferred_position:
             out["chosen_position"] = picked["position"]
+
+        # ---------------- cross-check against the file's Supplier ----------------
+        uploaded = (row.get("supplier") or "").strip()
+        correction = {
+            "row_index": row.get("row_index"),
+            "hppn": hppn,
+            "position": picked["position"],
+            "mapped_supplier": picked["supplier_name"],
+            "uploaded_supplier": uploaded,
+            "mapped_ms4": picked["ms4_vendor_code"].strip(),
+            "mapped_vendor": picked["vendor_code"].strip(),
+        }
+
+        if not uploaded:
+            corrections.append(
+                {
+                    **correction,
+                    "status": "blank",
+                    "message": "Supplier is blank in the file; the map result was kept.",
+                }
+            )
+        elif normalise_supplier(uploaded) != normalise_supplier(picked["supplier_name"]):
+            matches = by_supplier.get(normalise_supplier(uploaded), [])
+            distinct = {
+                (m["ms4_vendor_code"].strip(), m["vendor_code"].strip()) for m in matches
+            }
+            replacement = None
+            if len(matches) == 1 or len(distinct) == 1:
+                replacement = matches[0]
+            elif len(matches) > 1:
+                at_preferred = [m for m in matches if m["position"] == preferred_position]
+                if len(at_preferred) == 1:
+                    replacement = at_preferred[0]
+
+            if replacement is not None:
+                _apply(out, replacement)
+                out["chosen_position"] = replacement["position"]
+                corrections.append(
+                    {
+                        **correction,
+                        "status": "corrected",
+                        "new_ms4": replacement["ms4_vendor_code"].strip(),
+                        "new_vendor": replacement["vendor_code"].strip(),
+                        "message": "Switched to the rule for the file's Supplier.",
+                    }
+                )
+            elif not matches:
+                corrections.append(
+                    {
+                        **correction,
+                        "status": "error",
+                        "message": f"Supplier '{uploaded}' is not in the HPPN / Vendor Map.",
+                    }
+                )
+            else:
+                corrections.append(
+                    {
+                        **correction,
+                        "status": "error",
+                        "message": f"Supplier '{uploaded}' appears several times in the map "
+                        "with different vendor codes.",
+                    }
+                )
 
         missing = []
         if not out["ms4_vendor_code"]:
@@ -296,17 +398,16 @@ def resolve_vendors(
         if not out["vendor_code"]:
             missing.append("vendor code")
         if missing:
-            letter = picked["alphabet"].upper()
             unmatched.append(
                 {
                     **out,
-                    "reason": f"Map entry '{letter}' at position {picked['position']} "
-                    f"has no {' and no '.join(missing)}.",
+                    "reason": f"The rule for '{out['supplier_name'] or hppn}' has no "
+                    f"{' and no '.join(missing)}.",
                 }
             )
         resolved.append(out)
 
-    return resolved, unmatched, ambiguous
+    return resolved, unmatched, ambiguous, corrections
 
 
 # --------------------------------------------------------------------------
